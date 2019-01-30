@@ -88,6 +88,7 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
   private final Table table;
   private final FileIO fileIo;
+  private final boolean caseSensitive;
   private StructType requestedSchema = null;
   private List<Expression> filterExpressions = null;
   private Filter[] pushedFilters = NO_FILTERS;
@@ -97,10 +98,11 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
   private StructType type = null; // cached because Spark accesses it multiple times
   private List<CombinedScanTask> tasks = null; // lazy cache of tasks
 
-  Reader(Table table) {
+  Reader(Table table, boolean caseSensitive) {
     this.table = table;
     this.schema = table.schema();
     this.fileIo = table.io();
+    this.caseSensitive = caseSensitive;
   }
 
   private Schema lazySchema() {
@@ -133,7 +135,7 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
     List<InputPartition<InternalRow>> readTasks = Lists.newArrayList();
     for (CombinedScanTask task : tasks()) {
-      readTasks.add(new ReadTask(task, tableSchemaString, expectedSchemaString, fileIo));
+      readTasks.add(new ReadTask(task, tableSchemaString, expectedSchemaString, fileIo, caseSensitive));
     }
 
     return readTasks;
@@ -197,7 +199,10 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
   private List<CombinedScanTask> tasks() {
     if (tasks == null) {
-      TableScan scan = table.newScan().project(lazySchema());
+      TableScan scan = table
+              .newScan()
+              .caseSensitive(caseSensitive)
+              .project(lazySchema());
 
       if (filterExpressions != null) {
         for (Expression filter : filterExpressions) {
@@ -218,8 +223,8 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
   @Override
   public String toString() {
     return String.format(
-        "IcebergScan(table=%s, type=%s, filters=%s)",
-        table, lazySchema().asStruct(), filterExpressions);
+        "IcebergScan(table=%s, type=%s, filters=%s, caseSensitive=%s)",
+        table, lazySchema().asStruct(), filterExpressions, caseSensitive);
   }
 
   private static class ReadTask implements InputPartition<InternalRow>, Serializable {
@@ -227,21 +232,29 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     private final String tableSchemaString;
     private final String expectedSchemaString;
     private final FileIO fileIo;
+    private final boolean caseSensitive;
 
     private transient Schema tableSchema = null;
     private transient Schema expectedSchema = null;
 
     private ReadTask(
-        CombinedScanTask task, String tableSchemaString, String expectedSchemaString, FileIO fileIo) {
+        CombinedScanTask task,
+        String tableSchemaString,
+        String expectedSchemaString,
+        FileIO fileIo,
+        boolean caseSensitive) {
+
       this.task = task;
       this.tableSchemaString = tableSchemaString;
       this.expectedSchemaString = expectedSchemaString;
       this.fileIo = fileIo;
+      this.caseSensitive = caseSensitive;
+
     }
 
     @Override
     public InputPartitionReader<InternalRow> createPartitionReader() {
-      return new TaskDataReader(task, lazyTableSchema(), lazyExpectedSchema(), fileIo);
+      return new TaskDataReader(task, lazyTableSchema(), lazyExpectedSchema(), fileIo, caseSensitive);
     }
 
     private Schema lazyTableSchema() {
@@ -269,18 +282,26 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     private final Schema tableSchema;
     private final Schema expectedSchema;
     private final FileIO fileIo;
+    private final boolean caseSensitive;
 
     private Iterator<InternalRow> currentIterator = null;
     private Closeable currentCloseable = null;
     private InternalRow current = null;
 
-    public TaskDataReader(CombinedScanTask task, Schema tableSchema, Schema expectedSchema, FileIO fileIo) {
+    public TaskDataReader(
+            CombinedScanTask task,
+            Schema tableSchema,
+            Schema expectedSchema,
+            FileIO fileIo,
+            boolean caseSensitive) {
+
       this.fileIo = fileIo;
       this.tasks = task.files().iterator();
       this.tableSchema = tableSchema;
       this.expectedSchema = expectedSchema;
       // open last because the schemas and fileIo must be set
       this.currentIterator = open(tasks.next());
+      this.caseSensitive = caseSensitive;
     }
 
     @Override
@@ -325,7 +346,7 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
       Set<Integer> idColumns = spec.identitySourceIds();
 
       // schema needed for the projection and filtering
-      Schema requiredSchema = prune(tableSchema, convert(finalSchema), task.residual());
+      Schema requiredSchema = prune(tableSchema, convert(finalSchema), task.residual(), caseSensitive);
       boolean hasJoinedPartitionColumns = !idColumns.isEmpty();
       boolean hasExtraFilterColumns = requiredSchema.columns().size() != finalSchema.columns().size();
 

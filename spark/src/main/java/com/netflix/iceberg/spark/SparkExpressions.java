@@ -21,6 +21,7 @@ package com.netflix.iceberg.spark;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
+import com.netflix.iceberg.ConfigProperties;
 import com.netflix.iceberg.Schema;
 import com.netflix.iceberg.expressions.Binder;
 import com.netflix.iceberg.expressions.BoundReference;
@@ -28,6 +29,7 @@ import com.netflix.iceberg.expressions.Expression.Operation;
 import com.netflix.iceberg.expressions.ExpressionVisitors;
 import com.netflix.iceberg.types.Types.TimestampType;
 import com.netflix.iceberg.util.Pair;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.Column;
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute;
 import org.apache.spark.sql.catalyst.expressions.And;
@@ -334,10 +336,19 @@ public class SparkExpressions {
     }
   }
 
-  public static Expression convert(com.netflix.iceberg.expressions.Expression filter,
-                                   Schema schema) {
-    return visit(Binder.bind(schema.asStruct(), filter, true), new ExpressionToSpark(schema));
-  }
+// FIXME: Let's consider removing this method as no-one is using it.
+//
+//  public static Expression convert(com.netflix.iceberg.expressions.Expression filter,
+//                                   Schema schema, Configuration conf) {
+//    return visit(
+//            Binder.bind(
+//                    schema.asStruct(),
+//                    filter,
+//                    ConfigProperties.isCaseSensitive(conf)
+//            ),
+//            new ExpressionToSpark(schema)
+//    );
+//  }
 
   private static class ExpressionToSpark extends ExpressionVisitors.
       BoundExpressionVisitor<Expression> {
