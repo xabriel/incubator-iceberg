@@ -336,19 +336,10 @@ public class SparkExpressions {
     }
   }
 
-// FIXME: Let's consider removing this method as no-one is using it.
-//
-//  public static Expression convert(com.netflix.iceberg.expressions.Expression filter,
-//                                   Schema schema, Configuration conf) {
-//    return visit(
-//            Binder.bind(
-//                    schema.asStruct(),
-//                    filter,
-//                    ConfigProperties.isCaseSensitive(conf)
-//            ),
-//            new ExpressionToSpark(schema)
-//    );
-//  }
+  public static Expression convert(com.netflix.iceberg.expressions.Expression filter,
+                                   Schema schema) {
+    return visit(Binder.bind(schema.asStruct(), filter, true), new ExpressionToSpark(schema));
+  }
 
   private static class ExpressionToSpark extends ExpressionVisitors.
       BoundExpressionVisitor<Expression> {

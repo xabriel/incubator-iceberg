@@ -249,7 +249,6 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
       this.expectedSchemaString = expectedSchemaString;
       this.fileIo = fileIo;
       this.caseSensitive = caseSensitive;
-
     }
 
     @Override
