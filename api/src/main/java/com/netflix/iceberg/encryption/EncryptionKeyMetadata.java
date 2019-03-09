@@ -17,28 +17,38 @@
  * under the License.
  */
 
-package com.netflix.iceberg;
+package com.netflix.iceberg.encryption;
 
-import com.netflix.iceberg.exceptions.CommitFailedException;
+import java.nio.ByteBuffer;
 
 /**
- * Append implementation that produces a minimal number of manifest files.
+ * Light typedef over a ByteBuffer that indicates that the given bytes represent metadata about
+ * an encrypted data file's encryption key.
  * <p>
- * This implementation will attempt to commit 5 times before throwing {@link CommitFailedException}.
+ * This is preferred over passing a ByteBuffer directly in order to be more explicit.
  */
-class MergeAppend extends MergingSnapshotUpdate implements AppendFiles {
-  MergeAppend(TableOperations ops) {
-    super(ops);
+public interface EncryptionKeyMetadata {
+
+  EncryptionKeyMetadata EMPTY = new EncryptionKeyMetadata() {
+    @Override
+    public ByteBuffer buffer() {
+      return null;
+    }
+
+    @Override
+    public EncryptionKeyMetadata copy() {
+      return this;
+    }
+  };
+
+  static EncryptionKeyMetadata empty() {
+    return EMPTY;
   }
 
-  @Override
-  protected String operation() {
-    return DataOperations.APPEND;
-  }
+  /**
+   * Opaque blob representing metadata about a file's encryption key.
+   */
+  ByteBuffer buffer();
 
-  @Override
-  public MergeAppend appendFile(DataFile file) {
-    add(file);
-    return this;
-  }
+  EncryptionKeyMetadata copy();
 }

@@ -19,7 +19,9 @@
 
 package com.netflix.iceberg;
 
+import com.netflix.iceberg.encryption.EncryptionManager;
 import com.netflix.iceberg.io.FileIO;
+import com.netflix.iceberg.io.LocationProvider;
 import java.util.Map;
 
 /**
@@ -185,4 +187,14 @@ public interface Table {
    */
   FileIO io();
 
+  /**
+   * @return an {@link com.netflix.iceberg.encryption.EncryptionManager} to encrypt and decrypt
+   * data files.
+   */
+  EncryptionManager encryption();
+
+  /**
+   * @return a {@link LocationProvider} to provide locations for new data files
+   */
+  LocationProvider locationProvider();
 }

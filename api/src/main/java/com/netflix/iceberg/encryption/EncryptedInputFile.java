@@ -17,28 +17,29 @@
  * under the License.
  */
 
-package com.netflix.iceberg;
+package com.netflix.iceberg.encryption;
 
-import com.netflix.iceberg.exceptions.CommitFailedException;
+import com.netflix.iceberg.io.InputFile;
+
+import java.nio.ByteBuffer;
 
 /**
- * Append implementation that produces a minimal number of manifest files.
+ * Thin wrapper around an {@link InputFile} instance that is encrypted.
  * <p>
- * This implementation will attempt to commit 5 times before throwing {@link CommitFailedException}.
+ * The {@link EncryptionManager} takes instances of these and uses the attached
+ * {@link #keyMetadata()} to find an encryption key and decrypt the enclosed
+ * {@link #encryptedInputFile()}.
  */
-class MergeAppend extends MergingSnapshotUpdate implements AppendFiles {
-  MergeAppend(TableOperations ops) {
-    super(ops);
-  }
+public interface EncryptedInputFile {
 
-  @Override
-  protected String operation() {
-    return DataOperations.APPEND;
-  }
+  /**
+   * The {@link InputFile} that is reading raw encrypted bytes from the underlying file system.
+   */
+  InputFile encryptedInputFile();
 
-  @Override
-  public MergeAppend appendFile(DataFile file) {
-    add(file);
-    return this;
-  }
+  /**
+   * Metadata pointing to some encryption key that would be used to decrypt the input file provided
+   * by {@link #encryptedInputFile()}.
+   */
+  EncryptionKeyMetadata keyMetadata();
 }

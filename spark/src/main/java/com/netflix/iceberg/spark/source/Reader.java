@@ -19,9 +19,14 @@
 
 package com.netflix.iceberg.spark.source;
 
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.netflix.iceberg.CombinedScanTask;
 import com.netflix.iceberg.DataFile;
+import com.netflix.iceberg.encryption.EncryptedFiles;
+import com.netflix.iceberg.encryption.EncryptionManager;
 import com.netflix.iceberg.io.FileIO;
 import com.netflix.iceberg.FileScanTask;
 import com.netflix.iceberg.PartitionField;
@@ -66,12 +71,15 @@ import org.apache.spark.sql.types.StringType;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.unsafe.types.UTF8String;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -83,11 +91,13 @@ import static scala.collection.JavaConverters.seqAsJavaListConverter;
 
 class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushDownRequiredColumns,
     SupportsReportStatistics {
+  private static final Logger LOG = LoggerFactory.getLogger(Reader.class);
 
   private static final Filter[] NO_FILTERS = new Filter[0];
 
   private final Table table;
   private final FileIO fileIo;
+  private final EncryptionManager encryptionManager;
   private final boolean caseSensitive;
   private StructType requestedSchema = null;
   private List<Expression> filterExpressions = null;
@@ -102,6 +112,7 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     this.table = table;
     this.schema = table.schema();
     this.fileIo = table.io();
+    this.encryptionManager = table.encryption();
     this.caseSensitive = caseSensitive;
   }
 
@@ -135,7 +146,8 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
     List<InputPartition<InternalRow>> readTasks = Lists.newArrayList();
     for (CombinedScanTask task : tasks()) {
-      readTasks.add(new ReadTask(task, tableSchemaString, expectedSchemaString, fileIo, caseSensitive));
+      readTasks.add(
+        new ReadTask(task, tableSchemaString, expectedSchemaString, fileIo, encryptionManager, caseSensitive));
     }
 
     return readTasks;
@@ -232,28 +244,27 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     private final String tableSchemaString;
     private final String expectedSchemaString;
     private final FileIO fileIo;
+    private final EncryptionManager encryptionManager;
     private final boolean caseSensitive;
 
     private transient Schema tableSchema = null;
     private transient Schema expectedSchema = null;
 
     private ReadTask(
-        CombinedScanTask task,
-        String tableSchemaString,
-        String expectedSchemaString,
-        FileIO fileIo,
-        boolean caseSensitive) {
-
+        CombinedScanTask task, String tableSchemaString, String expectedSchemaString, FileIO fileIo,
+        EncryptionManager encryptionManager, boolean caseSensitive) {
       this.task = task;
       this.tableSchemaString = tableSchemaString;
       this.expectedSchemaString = expectedSchemaString;
       this.fileIo = fileIo;
+      this.encryptionManager = encryptionManager;
       this.caseSensitive = caseSensitive;
     }
 
     @Override
     public InputPartitionReader<InternalRow> createPartitionReader() {
-      return new TaskDataReader(task, lazyTableSchema(), lazyExpectedSchema(), fileIo, caseSensitive);
+      return new TaskDataReader(task, lazyTableSchema(), lazyExpectedSchema(), fileIo, encryptionManager,
+                                caseSensitive);
     }
 
     private Schema lazyTableSchema() {
@@ -281,23 +292,27 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     private final Schema tableSchema;
     private final Schema expectedSchema;
     private final FileIO fileIo;
+    private final Map<String, InputFile> inputFiles;
     private final boolean caseSensitive;
 
     private Iterator<InternalRow> currentIterator = null;
     private Closeable currentCloseable = null;
     private InternalRow current = null;
 
-    public TaskDataReader(
-            CombinedScanTask task,
-            Schema tableSchema,
-            Schema expectedSchema,
-            FileIO fileIo,
-            boolean caseSensitive) {
-
+    public TaskDataReader(CombinedScanTask task, Schema tableSchema, Schema expectedSchema, FileIO fileIo,
+                          EncryptionManager encryptionManager, boolean caseSensitive) {
       this.fileIo = fileIo;
       this.tasks = task.files().iterator();
       this.tableSchema = tableSchema;
       this.expectedSchema = expectedSchema;
+      Iterable<InputFile> decryptedFiles = encryptionManager.decrypt(Iterables.transform(task.files(),
+          fileScanTask ->
+              EncryptedFiles.encryptedInput(
+                  this.fileIo.newInputFile(fileScanTask.file().path().toString()),
+                  fileScanTask.file().keyMetadata())));
+      ImmutableMap.Builder<String, InputFile> inputFileBuilder = ImmutableMap.builder();
+      decryptedFiles.forEach(decrypted -> inputFileBuilder.put(decrypted.location(), decrypted));
+      this.inputFiles = inputFileBuilder.build();
       // open last because the schemas and fileIo must be set
       this.currentIterator = open(tasks.next());
       this.caseSensitive = caseSensitive;
@@ -405,7 +420,8 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     }
 
     private Iterator<InternalRow> open(FileScanTask task, Schema readSchema) {
-      InputFile location = fileIo.newInputFile(task.file().path().toString());
+      InputFile location = inputFiles.get(task.file().path().toString());
+      Preconditions.checkNotNull(location, "Could not find InputFile associated with FileScanTask");
       CloseableIterable<InternalRow> iter;
       switch (task.file().format()) {
         case PARQUET:
@@ -483,7 +499,12 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     @Override
     public InternalRow apply(StructLike tuple) {
       for (int i = 0; i < types.length; i += 1) {
-        reusedRow.update(i, convert(tuple.get(positions[i], javaTypes[i]), types[i]));
+        Object value = tuple.get(positions[i], javaTypes[i]);
+        if (value != null) {
+          reusedRow.update(i, convert(value, types[i]));
+        } else {
+          reusedRow.setNullAt(i);
+        }
       }
 
       return reusedRow;

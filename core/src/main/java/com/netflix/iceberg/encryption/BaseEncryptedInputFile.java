@@ -17,28 +17,27 @@
  * under the License.
  */
 
-package com.netflix.iceberg;
+package com.netflix.iceberg.encryption;
 
-import com.netflix.iceberg.exceptions.CommitFailedException;
+import com.netflix.iceberg.io.InputFile;
 
-/**
- * Append implementation that produces a minimal number of manifest files.
- * <p>
- * This implementation will attempt to commit 5 times before throwing {@link CommitFailedException}.
- */
-class MergeAppend extends MergingSnapshotUpdate implements AppendFiles {
-  MergeAppend(TableOperations ops) {
-    super(ops);
+class BaseEncryptedInputFile implements EncryptedInputFile {
+
+  private final InputFile encryptedInputFile;
+  private final EncryptionKeyMetadata keyMetadata;
+
+  public BaseEncryptedInputFile(InputFile encryptedInputFile, EncryptionKeyMetadata keyMetadata) {
+    this.encryptedInputFile = encryptedInputFile;
+    this.keyMetadata = keyMetadata;
   }
 
   @Override
-  protected String operation() {
-    return DataOperations.APPEND;
+  public InputFile encryptedInputFile() {
+    return encryptedInputFile;
   }
 
   @Override
-  public MergeAppend appendFile(DataFile file) {
-    add(file);
-    return this;
+  public EncryptionKeyMetadata keyMetadata() {
+    return keyMetadata;
   }
 }
